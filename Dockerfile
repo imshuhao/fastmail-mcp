@@ -13,7 +13,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --omit=optional --ignore-scripts
 COPY --from=build /app/dist ./dist
 EXPOSE 3000
-ENV MCP_TRANSPORT=stdio
+ENV MCP_TRANSPORT=http
 CMD ["node", "dist/index.js"]
-
 

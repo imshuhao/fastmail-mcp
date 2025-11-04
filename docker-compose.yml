@@ -4,7 +4,7 @@ services:
     image: fastmail-mcp:beta
     restart: unless-stopped
     environment:
-      MCP_TRANSPORT: sse
+      MCP_TRANSPORT: http
       PORT: 3000
       HOST: 0.0.0.0
       AUTH_HEADER: Authorization
@@ -12,4 +12,3 @@ services:
       FASTMAIL_BASE_URL: ${FASTMAIL_BASE_URL}
     ports:
       - "3000:3000"
-

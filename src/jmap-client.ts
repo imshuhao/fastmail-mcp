@@ -726,11 +726,11 @@ export class JmapClient {
 
   async bulkDelete(emailIds: string[]): Promise<void> {
     const session = await this.getSession();
-    
+
     // Find the trash mailbox
     const mailboxes = await this.getMailboxes();
     const trashMailbox = mailboxes.find(mb => mb.role === 'trash') || mailboxes.find(mb => mb.name.toLowerCase().includes('trash'));
-    
+
     if (!trashMailbox) {
       throw new Error('Could not find Trash mailbox');
     }
@@ -755,9 +755,131 @@ export class JmapClient {
 
     const response = await this.makeRequest(request);
     const result = response.methodResponses[0][1];
-    
+
     if (result.notUpdated && Object.keys(result.notUpdated).length > 0) {
       throw new Error('Failed to delete some emails.');
+    }
+  }
+
+  async addLabels(emailId: string, mailboxIds: string[]): Promise<void> {
+    const session = await this.getSession();
+
+    // Build patch object to add specific mailboxIds
+    const patch: Record<string, any> = {};
+    mailboxIds.forEach(mailboxId => {
+      patch[`mailboxIds/${mailboxId}`] = true;
+    });
+
+    const request: JmapRequest = {
+      using: ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
+      methodCalls: [
+        ['Email/set', {
+          accountId: session.accountId,
+          update: {
+            [emailId]: patch
+          }
+        }, 'addLabels']
+      ]
+    };
+
+    const response = await this.makeRequest(request);
+    const result = response.methodResponses[0][1];
+
+    if (result.notUpdated && result.notUpdated[emailId]) {
+      throw new Error('Failed to add labels to email.');
+    }
+  }
+
+  async removeLabels(emailId: string, mailboxIds: string[]): Promise<void> {
+    const session = await this.getSession();
+
+    // Build patch object to remove specific mailboxIds
+    const patch: Record<string, any> = {};
+    mailboxIds.forEach(mailboxId => {
+      patch[`mailboxIds/${mailboxId}`] = null;
+    });
+
+    const request: JmapRequest = {
+      using: ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
+      methodCalls: [
+        ['Email/set', {
+          accountId: session.accountId,
+          update: {
+            [emailId]: patch
+          }
+        }, 'removeLabels']
+      ]
+    };
+
+    const response = await this.makeRequest(request);
+    const result = response.methodResponses[0][1];
+
+    if (result.notUpdated && result.notUpdated[emailId]) {
+      throw new Error('Failed to remove labels from email.');
+    }
+  }
+
+  async bulkAddLabels(emailIds: string[], mailboxIds: string[]): Promise<void> {
+    const session = await this.getSession();
+
+    // Build patch object to add specific mailboxIds
+    const patch: Record<string, any> = {};
+    mailboxIds.forEach(mailboxId => {
+      patch[`mailboxIds/${mailboxId}`] = true;
+    });
+
+    const updates: Record<string, any> = {};
+    emailIds.forEach(id => {
+      updates[id] = patch;
+    });
+
+    const request: JmapRequest = {
+      using: ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
+      methodCalls: [
+        ['Email/set', {
+          accountId: session.accountId,
+          update: updates
+        }, 'bulkAddLabels']
+      ]
+    };
+
+    const response = await this.makeRequest(request);
+    const result = response.methodResponses[0][1];
+
+    if (result.notUpdated && Object.keys(result.notUpdated).length > 0) {
+      throw new Error('Failed to add labels to some emails.');
+    }
+  }
+
+  async bulkRemoveLabels(emailIds: string[], mailboxIds: string[]): Promise<void> {
+    const session = await this.getSession();
+
+    // Build patch object to remove specific mailboxIds
+    const patch: Record<string, any> = {};
+    mailboxIds.forEach(mailboxId => {
+      patch[`mailboxIds/${mailboxId}`] = null;
+    });
+
+    const updates: Record<string, any> = {};
+    emailIds.forEach(id => {
+      updates[id] = patch;
+    });
+
+    const request: JmapRequest = {
+      using: ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
+      methodCalls: [
+        ['Email/set', {
+          accountId: session.accountId,
+          update: updates
+        }, 'bulkRemoveLabels']
+      ]
+    };
+
+    const response = await this.makeRequest(request);
+    const result = response.methodResponses[0][1];
+
+    if (result.notUpdated && Object.keys(result.notUpdated).length > 0) {
+      throw new Error('Failed to remove labels from some emails.');
     }
   }
 }

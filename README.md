@@ -28,10 +28,6 @@ A Model Context Protocol (MCP) server that provides access to the Fastmail API, 
 - Get specific calendar events by ID
 - Create new calendar events with participants and details
 
-### Label vs Move Operations
-- **move_email/bulk_move**: Replaces ALL mailboxes for an email (folder behavior)
-- **add_labels/remove_labels**: Adds/removes SPECIFIC mailboxes while preserving others (label behavior)
-
 ### Identity & Account Management
 - List available sending identities
 - Account summary with comprehensive statistics
@@ -118,7 +114,7 @@ You can install this server as a Desktop Extension for Claude Desktop using the 
    npm run build
    npx dxt pack
    ```
-   This produces `fastmail-mcp.dxt` in the project root.
+   This produces `fastmail-mcp.example.com` in the project root.
 
 2. Install into Claude Desktop:
    - Open the `.dxt` file, or drag it into Claude Desktop
@@ -127,6 +123,78 @@ You can install this server as a Desktop Extension for Claude Desktop using the 
      - Fastmail Base URL: leave blank to use `https://api.fastmail.com` (default)
 
 3. Use any of the tools (e.g. `get_recent_emails`).
+
+## Run as a remote HTTPS (SSE) connector (beta)
+
+This mode enables multi-user connections from Claude Web/Desktop custom connectors. Each user provides their own Fastmail API token in the Claude client; the server does not store tokens.
+
+1. Build:
+   ```bash
+   npm run build
+   ```
+2. Run (SSE mode):
+   ```bash
+   MCP_TRANSPORT=sse PORT=3000 HOST=0.0.0.0 \
+   AUTH_HEADER=Authorization AUTH_SCHEME=Bearer \
+   FASTMAIL_BASE_URL="https://api.fastmail.com" \
+   node dist/index.js
+   ```
+3. Add a custom connector in Claude (HTTPS):
+   - URL: `https://<your-domain>/mcp`
+   - Secret: paste your Fastmail API token (it will be forwarded as `Authorization: Bearer <token>`)
+
+Notes:
+- The server keeps tokens in-memory per connection only. No persistence.
+- Keep DXT/npx flows unchanged by omitting `MCP_TRANSPORT` (defaults to stdio).
+- You can optionally require `X-Connector-Secret` to match `CONNECTOR_SHARED_SECRET` for extra protection.
+
+### Docker Compose (example)
+
+Create `docker-compose.yml` and `.env` (do not commit secrets):
+
+```yaml
+services:
+  app:
+    build: .
+    image: fastmail-mcp:beta
+    restart: unless-stopped
+    environment:
+      MCP_TRANSPORT: sse
+      PORT: 3000
+      HOST: 0.0.0.0
+      AUTH_HEADER: Authorization
+      AUTH_SCHEME: Bearer
+      CONNECTOR_SHARED_SECRET: ${CONNECTOR_SHARED_SECRET}
+      FASTMAIL_BASE_URL: ${FASTMAIL_BASE_URL}
+    ports:
+      - "3000:3000"
+```
+
+Put this behind a TLS reverse proxy (Caddy/Nginx) and expose `https://` on your domain.
+
+#### Caddy example (SSE)
+```
+fastmail-mcp.example.com {
+  encode zstd gzip
+  reverse_proxy /mcp app:3000
+  reverse_proxy /mcp/messages app:3000
+  reverse_proxy /healthz app:3000
+}
+```
+
+### .env file (example)
+Create a `.env` file alongside `docker-compose.yml`:
+```env
+FASTMAIL_BASE_URL=https://api.fastmail.com
+# Optional extra gate for WS connects; comment out to disable
+# CONNECTOR_SHARED_SECRET=your_shared_secret
+```
+
+### Rate limits and safety
+- Tools are unchanged; respect Fastmail API limits. Prefer small `limit` values and staggered bulk ops.
+- The server does not cache responses containing personal data.
+- Built-in gentle concurrency limits (2 in-flight per connection) and exponential backoff on 429/5xx help avoid rate limits.
+ - Logs are JSON lines; keep 7 days by rotating via your process manager or logrotate.
 
 ## Available Tools (35 Total)
 
@@ -154,7 +222,7 @@ You can install this server as a Desktop Extension for Claude Desktop using the 
   - Parameters: `emailId` (required), `read` (default: true)
 - **delete_email**: Delete an email (move to trash)
   - Parameters: `emailId` (required)
-- **move_email**: Move an email to a different mailbox (replaces all mailboxes)
+- **move_email**: Move an email to a different mailbox
   - Parameters: `emailId` (required), `targetMailboxId` (required)
 - **add_labels**: Add labels (mailboxes) to an email without removing existing ones
   - Parameters: `emailId` (required), `mailboxIds` (required array)
@@ -243,6 +311,7 @@ src/
 ├── auth.ts              # Authentication handling
 ├── jmap-client.ts       # JMAP client wrapper
 └── contacts-calendar.ts # Contacts and calendar extensions
+└── handlers.ts          # Tool registry (shared by stdio/ws)
 ```
 
 ### Building

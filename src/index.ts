@@ -10,6 +10,10 @@ import {
 import { FastmailAuth, FastmailConfig } from './auth.js';
 import { JmapClient, JmapRequest } from './jmap-client.js';
 import { ContactsCalendarClient } from './contacts-calendar.js';
+import { registerHandlers } from './handlers.js';
+import http from 'node:http';
+import { WebSocketServer } from 'ws';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 
 const server = new Server(
   {
@@ -450,44 +454,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: 'add_labels',
-        description: 'Add labels (mailboxes) to an email without removing existing ones',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            emailId: {
-              type: 'string',
-              description: 'ID of the email to add labels to',
-            },
-            mailboxIds: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Array of mailbox IDs to add as labels',
-            },
-          },
-          required: ['emailId', 'mailboxIds'],
-        },
-      },
-      {
-        name: 'remove_labels',
-        description: 'Remove specific labels (mailboxes) from an email',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            emailId: {
-              type: 'string',
-              description: 'ID of the email to remove labels from',
-            },
-            mailboxIds: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Array of mailbox IDs to remove as labels',
-            },
-          },
-          required: ['emailId', 'mailboxIds'],
-        },
-      },
-      {
         name: 'get_email_attachments',
         description: 'Get list of attachments for an email',
         inputSchema: {
@@ -656,46 +622,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ['emailIds'],
-        },
-      },
-      {
-        name: 'bulk_add_labels',
-        description: 'Add labels to multiple emails simultaneously',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            emailIds: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Array of email IDs to add labels to',
-            },
-            mailboxIds: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Array of mailbox IDs to add as labels',
-            },
-          },
-          required: ['emailIds', 'mailboxIds'],
-        },
-      },
-      {
-        name: 'bulk_remove_labels',
-        description: 'Remove labels from multiple emails simultaneously',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            emailIds: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Array of email IDs to remove labels from',
-            },
-            mailboxIds: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Array of mailbox IDs to remove as labels',
-            },
-          },
-          required: ['emailIds', 'mailboxIds'],
         },
       },
       {
@@ -1045,46 +971,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case 'add_labels': {
-        const { emailId, mailboxIds } = args as any;
-        if (!emailId) {
-          throw new McpError(ErrorCode.InvalidParams, 'emailId is required');
-        }
-        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
-          throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
-        }
-        const client = initializeClient();
-        await client.addLabels(emailId, mailboxIds);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Labels added successfully to email`,
-            },
-          ],
-        };
-      }
-
-      case 'remove_labels': {
-        const { emailId, mailboxIds } = args as any;
-        if (!emailId) {
-          throw new McpError(ErrorCode.InvalidParams, 'emailId is required');
-        }
-        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
-          throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
-        }
-        const client = initializeClient();
-        await client.removeLabels(emailId, mailboxIds);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Labels removed successfully from email`,
-            },
-          ],
-        };
-      }
-
       case 'get_email_attachments': {
         const { emailId } = args as any;
         if (!emailId) {
@@ -1246,46 +1132,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case 'bulk_add_labels': {
-        const { emailIds, mailboxIds } = args as any;
-        if (!emailIds || !Array.isArray(emailIds) || emailIds.length === 0) {
-          throw new McpError(ErrorCode.InvalidParams, 'emailIds array is required and must not be empty');
-        }
-        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
-          throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
-        }
-        const client = initializeClient();
-        await client.bulkAddLabels(emailIds, mailboxIds);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Labels added successfully to ${emailIds.length} emails`,
-            },
-          ],
-        };
-      }
-
-      case 'bulk_remove_labels': {
-        const { emailIds, mailboxIds } = args as any;
-        if (!emailIds || !Array.isArray(emailIds) || emailIds.length === 0) {
-          throw new McpError(ErrorCode.InvalidParams, 'emailIds array is required and must not be empty');
-        }
-        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
-          throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
-        }
-        const client = initializeClient();
-        await client.bulkRemoveLabels(emailIds, mailboxIds);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Labels removed successfully from ${emailIds.length} emails`,
-            },
-          ],
-        };
-      }
-
       case 'check_function_availability': {
         const client = initializeClient();
         const session = await client.getSession();
@@ -1296,9 +1142,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             functions: [
               'list_mailboxes', 'list_emails', 'get_email', 'send_email', 'search_emails',
               'get_recent_emails', 'mark_email_read', 'delete_email', 'move_email',
-              'add_labels', 'remove_labels', 'get_email_attachments', 'download_attachment',
-              'advanced_search', 'get_thread', 'get_mailbox_stats', 'get_account_summary',
-              'bulk_mark_read', 'bulk_move', 'bulk_delete', 'bulk_add_labels', 'bulk_remove_labels'
+              'get_email_attachments', 'download_attachment', 'advanced_search', 'get_thread',
+              'get_mailbox_stats', 'get_account_summary', 'bulk_mark_read', 'bulk_move', 'bulk_delete'
             ]
           },
           identity: {
@@ -1459,13 +1304,218 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function runServer() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error('Fastmail MCP server running on stdio');
+  const transportMode = (process.env.MCP_TRANSPORT || 'stdio').toLowerCase();
+  if (transportMode === 'stdio') {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error('Fastmail MCP server running on stdio');
+    return;
+  }
+
+  if (transportMode === 'ws') {
+    const port = parseInt(process.env.PORT || '3000', 10);
+    const host = process.env.HOST || '0.0.0.0';
+    const authHeader = (process.env.AUTH_HEADER || 'authorization').toLowerCase();
+    const authScheme = (process.env.AUTH_SCHEME || 'bearer').toLowerCase();
+    const defaultBaseUrl = process.env.FASTMAIL_BASE_URL;
+    const wsPath = process.env.WS_PATH || '/mcp';
+    const sharedSecret = process.env.CONNECTOR_SHARED_SECRET;
+
+    const httpServer = http.createServer((req, res) => {
+      if (req.url === '/healthz') {
+        res.writeHead(200).end('ok');
+        return;
+      }
+      res.writeHead(404).end('not found');
+    });
+
+    const wss = new WebSocketServer({ server: httpServer, path: wsPath });
+
+    wss.on('connection', async (ws, req) => {
+      // Extract token from Authorization header (or configured header)
+      const headers = req.headers;
+      let headerVal: string | undefined;
+      for (const [key, value] of Object.entries(headers)) {
+        if (key.toLowerCase() === authHeader && typeof value === 'string') {
+          headerVal = value;
+          break;
+        }
+      }
+      let token: string | undefined;
+      if (headerVal) {
+        const [scheme, rest] = headerVal.split(' ');
+        if (scheme && rest && scheme.toLowerCase() === authScheme) {
+          token = rest.trim();
+        }
+      }
+      if (!token) {
+        try { ws.close(4401, 'unauthorized'); } catch {}
+        return;
+      }
+
+      // Optional shared secret gate
+      if (sharedSecret) {
+        const providedSecret = (headers['x-connector-secret'] as string | undefined) || '';
+        if (providedSecret !== sharedSecret) {
+          try { ws.close(4403, 'forbidden'); } catch {}
+          return;
+        }
+      }
+
+      // Per-connection server
+      const connServer = new Server(
+        { name: 'fastmail-mcp', version: '1.6.1' },
+        { capabilities: { tools: {} } }
+      );
+
+      const auth = new FastmailAuth({ apiToken: token, baseUrl: defaultBaseUrl });
+      const jmap = new JmapClient(auth, { maxConcurrent: 2, maxQueue: 50, baseDelayMs: 300, maxDelayMs: 5000 });
+      const contacts = new ContactsCalendarClient(auth);
+      registerHandlers(connServer, {
+        getJmapClient: () => jmap,
+        getContactsClient: () => contacts,
+      });
+
+      // Minimal WebSocket transport implementing the Transport interface
+      const transport = {
+        start: async () => {},
+        send: async (message: any) => {
+          ws.send(JSON.stringify(message));
+        },
+        close: async () => {
+          try { ws.close(); } catch {}
+        },
+        onclose: undefined as (() => void) | undefined,
+        onerror: undefined as ((error: Error) => void) | undefined,
+        onmessage: undefined as ((message: any) => void) | undefined,
+      };
+
+      ws.on('message', (data) => {
+        try {
+          const parsed = JSON.parse(String(data));
+          if (transport.onmessage) transport.onmessage(parsed);
+        } catch {}
+      });
+      ws.on('close', () => {
+        if (transport.onclose) transport.onclose();
+      });
+      ws.on('error', (err) => {
+        if (transport.onerror) transport.onerror(err as Error);
+      });
+
+      await connServer.connect(transport as any);
+    });
+
+    await new Promise<void>((resolve) => httpServer.listen(port, host, resolve));
+    console.error(`Fastmail MCP server running on ws://${host}:${port}${wsPath}`);
+    return;
+  }
+
+  if (transportMode === 'sse') {
+    const port = parseInt(process.env.PORT || '3000', 10);
+    const host = process.env.HOST || '0.0.0.0';
+    const ssePath = process.env.SSE_PATH || '/mcp';
+    const messagesPath = `${ssePath.replace(/\/$/, '')}/messages`;
+    const authHeader = (process.env.AUTH_HEADER || 'authorization').toLowerCase();
+    const authScheme = (process.env.AUTH_SCHEME || 'bearer').toLowerCase();
+    const defaultBaseUrl = process.env.FASTMAIL_BASE_URL;
+    const sharedSecret = process.env.CONNECTOR_SHARED_SECRET;
+
+    const sessions = new Map<string, { transport: SSEServerTransport; context: { token?: string; jmap?: JmapClient; contacts?: ContactsCalendarClient }; server: Server }>();
+
+    const httpServer = http.createServer(async (req, res) => {
+      const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+
+      if (url.pathname === '/healthz') {
+        res.writeHead(200).end('ok');
+        return;
+      }
+
+      // Initial SSE connect (allow unauthenticated so Claude can add the connector)
+      if (req.method === 'GET' && url.pathname === ssePath) {
+        // Create per-connection server and SSE transport
+        const connServer = new Server(
+          { name: 'fastmail-mcp', version: '1.6.1' },
+          { capabilities: { tools: {} } }
+        );
+
+        const context: { token?: string; jmap?: JmapClient; contacts?: ContactsCalendarClient } = {};
+        registerHandlers(connServer, {
+          getJmapClient: () => {
+            if (!context.token) {
+              throw new McpError(ErrorCode.InvalidRequest, 'Missing authorization. Please connect the connector with your Fastmail API token.');
+            }
+            if (!context.jmap) {
+              const auth = new FastmailAuth({ apiToken: context.token, baseUrl: defaultBaseUrl });
+              context.jmap = new JmapClient(auth, { maxConcurrent: 2, maxQueue: 50, baseDelayMs: 300, maxDelayMs: 5000 });
+            }
+            return context.jmap;
+          },
+          getContactsClient: () => {
+            if (!context.token) {
+              throw new McpError(ErrorCode.InvalidRequest, 'Missing authorization. Please connect the connector with your Fastmail API token.');
+            }
+            if (!context.contacts) {
+              const auth = new FastmailAuth({ apiToken: context.token, baseUrl: defaultBaseUrl });
+              context.contacts = new ContactsCalendarClient(auth);
+            }
+            return context.contacts;
+          },
+        });
+
+        const transport = new SSEServerTransport(messagesPath, res);
+        sessions.set(transport.sessionId, { transport, context, server: connServer });
+        transport.onclose = () => {
+          sessions.delete(transport.sessionId);
+        };
+        await connServer.connect(transport as any);
+        return;
+      }
+
+      // POST messages from client (Claude) to server
+      if (req.method === 'POST' && url.pathname === messagesPath) {
+        const sessionId = url.searchParams.get('sessionId') || '';
+        const session = sessions.get(sessionId);
+        if (!session) {
+          res.writeHead(404).end('unknown session');
+          return;
+        }
+        // Capture Authorization token on first POST (Claude sends the secret now)
+        const headers = req.headers;
+        let headerVal: string | undefined;
+        for (const [key, value] of Object.entries(headers)) {
+          if (key.toLowerCase() === authHeader && typeof value === 'string') {
+            headerVal = value; break;
+          }
+        }
+        if (headerVal) {
+          const [scheme, rest] = headerVal.split(' ');
+          if (scheme && rest && scheme.toLowerCase() === authScheme) {
+            session.context.token = rest.trim();
+          }
+        }
+        if (!session.context.token) {
+          res.writeHead(401, {
+            'WWW-Authenticate': 'Bearer realm="fastmail", charset="UTF-8"'
+          }).end('authorization required');
+          return;
+        }
+        await session.transport.handlePostMessage(req, res);
+        return;
+      }
+
+      res.writeHead(404).end('not found');
+    });
+
+    await new Promise<void>((resolve) => httpServer.listen(port, host, resolve));
+    console.error(`Fastmail MCP server (SSE) on http://${host}:${port}${ssePath}`);
+    return;
+  }
+
+  throw new Error(`Unsupported MCP_TRANSPORT: ${transportMode}`);
 }
 
 runServer().catch(() => {
-  // Avoid logging raw error objects to prevent accidental PII leakage
   console.error('Fastmail MCP server failed to start');
   process.exit(1);
 });

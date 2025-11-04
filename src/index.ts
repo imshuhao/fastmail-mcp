@@ -454,6 +454,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: 'add_labels',
+        description: 'Add labels (mailboxes) to an email without removing existing ones',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            emailId: {
+              type: 'string',
+              description: 'ID of the email to add labels to',
+            },
+            mailboxIds: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of mailbox IDs to add as labels',
+            },
+          },
+          required: ['emailId', 'mailboxIds'],
+        },
+      },
+      {
+        name: 'remove_labels',
+        description: 'Remove specific labels (mailboxes) from an email',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            emailId: {
+              type: 'string',
+              description: 'ID of the email to remove labels from',
+            },
+            mailboxIds: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of mailbox IDs to remove as labels',
+            },
+          },
+          required: ['emailId', 'mailboxIds'],
+        },
+      },
+      {
         name: 'get_email_attachments',
         description: 'Get list of attachments for an email',
         inputSchema: {
@@ -622,6 +660,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ['emailIds'],
+        },
+      },
+      {
+        name: 'bulk_add_labels',
+        description: 'Add labels to multiple emails simultaneously',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            emailIds: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of email IDs to add labels to',
+            },
+            mailboxIds: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of mailbox IDs to add as labels',
+            },
+          },
+          required: ['emailIds', 'mailboxIds'],
+        },
+      },
+      {
+        name: 'bulk_remove_labels',
+        description: 'Remove labels from multiple emails simultaneously',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            emailIds: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of email IDs to remove labels from',
+            },
+            mailboxIds: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of mailbox IDs to remove as labels',
+            },
+          },
+          required: ['emailIds', 'mailboxIds'],
         },
       },
       {
@@ -971,6 +1049,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case 'add_labels': {
+        const { emailId, mailboxIds } = args as any;
+        if (!emailId) {
+          throw new McpError(ErrorCode.InvalidParams, 'emailId is required');
+        }
+        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
+          throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
+        }
+        const client = initializeClient();
+        await client.addLabels(emailId, mailboxIds);
+        return {
+          content: [
+            { type: 'text', text: 'Labels added successfully to email' },
+          ],
+        };
+      }
+
+      case 'remove_labels': {
+        const { emailId, mailboxIds } = args as any;
+        if (!emailId) {
+          throw new McpError(ErrorCode.InvalidParams, 'emailId is required');
+        }
+        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
+          throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
+        }
+        const client = initializeClient();
+        await client.removeLabels(emailId, mailboxIds);
+        return {
+          content: [
+            { type: 'text', text: 'Labels removed successfully from email' },
+          ],
+        };
+      }
+
       case 'get_email_attachments': {
         const { emailId } = args as any;
         if (!emailId) {
@@ -1128,6 +1240,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'text',
               text: `${emailIds.length} emails deleted successfully (moved to trash)`,
             },
+          ],
+        };
+      }
+
+      case 'bulk_add_labels': {
+        const { emailIds, mailboxIds } = args as any;
+        if (!emailIds || !Array.isArray(emailIds) || emailIds.length === 0) {
+          throw new McpError(ErrorCode.InvalidParams, 'emailIds array is required and must not be empty');
+        }
+        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
+          throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
+        }
+        const client = initializeClient();
+        await client.bulkAddLabels(emailIds, mailboxIds);
+        return {
+          content: [
+            { type: 'text', text: `Labels added successfully to ${emailIds.length} emails` },
+          ],
+        };
+      }
+
+      case 'bulk_remove_labels': {
+        const { emailIds, mailboxIds } = args as any;
+        if (!emailIds || !Array.isArray(emailIds) || emailIds.length === 0) {
+          throw new McpError(ErrorCode.InvalidParams, 'emailIds array is required and must not be empty');
+        }
+        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
+          throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
+        }
+        const client = initializeClient();
+        await client.bulkRemoveLabels(emailIds, mailboxIds);
+        return {
+          content: [
+            { type: 'text', text: `Labels removed successfully from ${emailIds.length} emails` },
           ],
         };
       }

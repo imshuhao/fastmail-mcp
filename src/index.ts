@@ -1468,7 +1468,7 @@ async function runServer() {
     const sharedSecret = process.env.CONNECTOR_SHARED_SECRET;
 
     const httpServer = http.createServer((req, res) => {
-      if (req.url === '/healthz') {
+      if (req.url === '/health') {
         res.writeHead(200).end('ok');
         return;
       }
@@ -1572,7 +1572,7 @@ async function runServer() {
     const httpServer = http.createServer(async (req, res) => {
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
-      if (url.pathname === '/healthz') {
+      if (url.pathname === '/health') {
         res.writeHead(200).end('ok');
         return;
       }

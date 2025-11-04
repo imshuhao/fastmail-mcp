@@ -94,7 +94,7 @@ Add a custom HTTPS connector in your client
 
 Health check
 ```bash
-curl -fsS https://<your-domain>/healthz
+curl -fsS https://<your-domain>/health
 ```
 
 ### Docker Compose (example)
@@ -124,7 +124,7 @@ fastmail-mcp.example.com {
   encode zstd gzip
   reverse_proxy /mcp app:3000
   reverse_proxy /mcp/messages app:3000
-  reverse_proxy /healthz app:3000
+  reverse_proxy /health app:3000
 }
 ```
 

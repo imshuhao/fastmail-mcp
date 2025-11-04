@@ -13,12 +13,14 @@ import { ContactsCalendarClient } from './contacts-calendar.js';
 import { registerHandlers } from './handlers.js';
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { randomUUID } from 'node:crypto';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
 const server = new Server(
   {
     name: 'fastmail-mcp',
-    version: '1.7.0',
+    version: '2.0.0',
   },
   {
     capabilities: {
@@ -1510,7 +1512,7 @@ async function runServer() {
 
       // Per-connection server
       const connServer = new Server(
-        { name: 'fastmail-mcp', version: '1.6.1' },
+        { name: 'fastmail-mcp', version: '2.0.0' },
         { capabilities: { tools: {} } }
       );
 
@@ -1557,17 +1559,20 @@ async function runServer() {
     return;
   }
 
-  if (transportMode === 'sse') {
+  if (transportMode === 'http' || transportMode === 'sse') {
     const port = parseInt(process.env.PORT || '3000', 10);
     const host = process.env.HOST || '0.0.0.0';
-    const ssePath = process.env.SSE_PATH || '/mcp';
-    const messagesPath = `${ssePath.replace(/\/$/, '')}/messages`;
+    const mcpPath = process.env.MCP_PATH || process.env.SSE_PATH || '/mcp';
     const authHeader = (process.env.AUTH_HEADER || 'authorization').toLowerCase();
     const authScheme = (process.env.AUTH_SCHEME || 'bearer').toLowerCase();
     const defaultBaseUrl = process.env.FASTMAIL_BASE_URL;
     const sharedSecret = process.env.CONNECTOR_SHARED_SECRET;
 
-    const sessions = new Map<string, { transport: SSEServerTransport; context: { token?: string; jmap?: JmapClient; contacts?: ContactsCalendarClient }; server: Server }>();
+    const sessions = new Map<string, {
+      transport: StreamableHTTPServerTransport;
+      context: { token?: string; jmap?: JmapClient; contacts?: ContactsCalendarClient };
+      server: Server
+    }>();
 
     const httpServer = http.createServer(async (req, res) => {
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -1577,76 +1582,204 @@ async function runServer() {
         return;
       }
 
-      // Initial SSE connect (allow unauthenticated so Claude can add the connector)
-      if (req.method === 'GET' && url.pathname === ssePath) {
-        // Create per-connection server and SSE transport
-        const connServer = new Server(
-          { name: 'fastmail-mcp', version: '1.6.1' },
-          { capabilities: { tools: {} } }
-        );
+      if (url.pathname === mcpPath) {
+        const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-        const context: { token?: string; jmap?: JmapClient; contacts?: ContactsCalendarClient } = {};
-        registerHandlers(connServer, {
-          getJmapClient: () => {
-            if (!context.token) {
-              throw new McpError(ErrorCode.InvalidRequest, 'Missing authorization. Please connect the connector with your Fastmail API token.');
-            }
-            if (!context.jmap) {
-              const auth = new FastmailAuth({ apiToken: context.token, baseUrl: defaultBaseUrl });
-              context.jmap = new JmapClient(auth, { maxConcurrent: 2, maxQueue: 50, baseDelayMs: 300, maxDelayMs: 5000 });
-            }
-            return context.jmap;
-          },
-          getContactsClient: () => {
-            if (!context.token) {
-              throw new McpError(ErrorCode.InvalidRequest, 'Missing authorization. Please connect the connector with your Fastmail API token.');
-            }
-            if (!context.contacts) {
-              const auth = new FastmailAuth({ apiToken: context.token, baseUrl: defaultBaseUrl });
-              context.contacts = new ContactsCalendarClient(auth);
-            }
-            return context.contacts;
-          },
-        });
+        // POST: Handle JSON-RPC messages
+        if (req.method === 'POST') {
+          try {
+            // Parse request body
+            let body = '';
+            req.on('data', chunk => { body += chunk.toString(); });
+            await new Promise((resolve) => req.on('end', resolve));
+            const parsedBody = body ? JSON.parse(body) : null;
 
-        const transport = new SSEServerTransport(messagesPath, res);
-        sessions.set(transport.sessionId, { transport, context, server: connServer });
-        transport.onclose = () => {
-          sessions.delete(transport.sessionId);
-        };
-        await connServer.connect(transport as any);
-        return;
-      }
+            // Extract and validate authentication
+            const headers = req.headers;
+            let headerVal: string | undefined;
+            for (const [key, value] of Object.entries(headers)) {
+              if (key.toLowerCase() === authHeader && typeof value === 'string') {
+                headerVal = value;
+                break;
+              }
+            }
 
-      // POST messages from client (Claude) to server
-      if (req.method === 'POST' && url.pathname === messagesPath) {
-        const sessionId = url.searchParams.get('sessionId') || '';
-        const session = sessions.get(sessionId);
-        if (!session) {
-          res.writeHead(404).end('unknown session');
+            let token: string | undefined;
+            if (headerVal) {
+              const [scheme, rest] = headerVal.split(' ');
+              if (scheme && rest && scheme.toLowerCase() === authScheme) {
+                token = rest.trim();
+              }
+            }
+
+            // Check shared secret if configured
+            if (sharedSecret && req.headers['x-connector-secret'] !== sharedSecret) {
+              res.writeHead(403).end('forbidden');
+              return;
+            }
+
+            let transport: StreamableHTTPServerTransport;
+            let session: { transport: StreamableHTTPServerTransport; context: any; server: Server } | undefined;
+
+            if (sessionId && sessions.has(sessionId)) {
+              // Reuse existing session
+              session = sessions.get(sessionId);
+              transport = session!.transport;
+
+              // Update token if provided
+              if (token && session) {
+                session.context.token = token;
+              }
+            } else if (!sessionId && isInitializeRequest(parsedBody)) {
+              // New initialization request - create new session
+              const connServer = new Server(
+                { name: 'fastmail-mcp', version: '2.0.0' },
+                { capabilities: { tools: {} } }
+              );
+
+              const context: { token?: string; jmap?: JmapClient; contacts?: ContactsCalendarClient } = {};
+
+              // Store token from initial request
+              if (token) {
+                context.token = token;
+              }
+
+              registerHandlers(connServer, {
+                getJmapClient: () => {
+                  if (!context.token) {
+                    throw new McpError(ErrorCode.InvalidRequest, 'Missing authorization. Please connect the connector with your Fastmail API token.');
+                  }
+                  if (!context.jmap) {
+                    const auth = new FastmailAuth({ apiToken: context.token, baseUrl: defaultBaseUrl });
+                    context.jmap = new JmapClient(auth, { maxConcurrent: 2, maxQueue: 50, baseDelayMs: 300, maxDelayMs: 5000 });
+                  }
+                  return context.jmap;
+                },
+                getContactsClient: () => {
+                  if (!context.token) {
+                    throw new McpError(ErrorCode.InvalidRequest, 'Missing authorization. Please connect the connector with your Fastmail API token.');
+                  }
+                  if (!context.contacts) {
+                    const auth = new FastmailAuth({ apiToken: context.token, baseUrl: defaultBaseUrl });
+                    context.contacts = new ContactsCalendarClient(auth);
+                  }
+                  return context.contacts;
+                },
+              });
+
+              transport = new StreamableHTTPServerTransport({
+                sessionIdGenerator: () => randomUUID(),
+                onsessioninitialized: (sid) => {
+                  console.error(`Session initialized: ${sid}`);
+                  sessions.set(sid, { transport, context, server: connServer });
+                },
+                onsessionclosed: (sid) => {
+                  console.error(`Session closed: ${sid}`);
+                  sessions.delete(sid);
+                }
+              });
+
+              transport.onclose = () => {
+                const sid = transport.sessionId;
+                if (sid && sessions.has(sid)) {
+                  console.error(`Transport closed for session ${sid}`);
+                  sessions.delete(sid);
+                }
+              };
+
+              // Connect transport to server BEFORE handling request
+              await connServer.connect(transport as any);
+            } else {
+              // Invalid request
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                jsonrpc: '2.0',
+                error: {
+                  code: -32000,
+                  message: 'Bad Request: No valid session ID provided or not an initialization request'
+                },
+                id: null
+              }));
+              return;
+            }
+
+            // Validate token for non-initialization requests
+            if (session && !session.context.token) {
+              res.writeHead(401, {
+                'WWW-Authenticate': `${authScheme.charAt(0).toUpperCase() + authScheme.slice(1)} realm="fastmail", charset="UTF-8"`
+              }).end('authorization required');
+              return;
+            }
+
+            // Handle the request
+            await transport.handleRequest(req, res, parsedBody);
+          } catch (error) {
+            console.error('Error handling POST request:', error);
+            if (!res.headersSent) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                jsonrpc: '2.0',
+                error: {
+                  code: -32603,
+                  message: 'Internal server error'
+                },
+                id: null
+              }));
+            }
+          }
           return;
         }
-        // Capture Authorization token on first POST (Claude sends the secret now)
-        const headers = req.headers;
-        let headerVal: string | undefined;
-        for (const [key, value] of Object.entries(headers)) {
-          if (key.toLowerCase() === authHeader && typeof value === 'string') {
-            headerVal = value; break;
+
+        // GET: Handle SSE stream for server-initiated messages
+        if (req.method === 'GET') {
+          if (!sessionId || !sessions.has(sessionId)) {
+            res.writeHead(400).end('Invalid or missing session ID');
+            return;
           }
-        }
-        if (headerVal) {
-          const [scheme, rest] = headerVal.split(' ');
-          if (scheme && rest && scheme.toLowerCase() === authScheme) {
-            session.context.token = rest.trim();
+
+          const session = sessions.get(sessionId)!;
+          const lastEventId = req.headers['last-event-id'] as string | undefined;
+
+          if (lastEventId) {
+            console.error(`Client reconnecting with Last-Event-ID: ${lastEventId}`);
+          } else {
+            console.error(`Establishing SSE stream for session ${sessionId}`);
           }
-        }
-        if (!session.context.token) {
-          res.writeHead(401, {
-            'WWW-Authenticate': 'Bearer realm="fastmail", charset="UTF-8"'
-          }).end('authorization required');
+
+          try {
+            await session.transport.handleRequest(req, res);
+          } catch (error) {
+            console.error('Error handling GET request:', error);
+            if (!res.headersSent) {
+              res.writeHead(500).end('Internal server error');
+            }
+          }
           return;
         }
-        await session.transport.handlePostMessage(req, res);
+
+        // DELETE: Handle session termination
+        if (req.method === 'DELETE') {
+          if (!sessionId || !sessions.has(sessionId)) {
+            res.writeHead(400).end('Invalid or missing session ID');
+            return;
+          }
+
+          console.error(`Session termination request for ${sessionId}`);
+          const session = sessions.get(sessionId)!;
+
+          try {
+            await session.transport.handleRequest(req, res);
+          } catch (error) {
+            console.error('Error handling DELETE request:', error);
+            if (!res.headersSent) {
+              res.writeHead(500).end('Error processing session termination');
+            }
+          }
+          return;
+        }
+
+        // Unsupported method
+        res.writeHead(405).end('Method not allowed');
         return;
       }
 
@@ -1654,7 +1787,7 @@ async function runServer() {
     });
 
     await new Promise<void>((resolve) => httpServer.listen(port, host, resolve));
-    console.error(`Fastmail MCP server (SSE) on http://${host}:${port}${ssePath}`);
+    console.error(`Fastmail MCP server (StreamableHttp) on http://${host}:${port}${mcpPath}`);
     return;
   }
 

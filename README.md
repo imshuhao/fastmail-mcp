@@ -1,6 +1,6 @@
 # Fastmail MCP Server
 
-A Model Context Protocol (MCP) server for Fastmail’s JMAP API. It exposes email, contacts, calendar, identity and bulk-management tools to LLM clients over stdio, WebSocket or SSE.
+A Model Context Protocol (MCP) server for Fastmail's JMAP API. It exposes email, contacts, calendar, identity and bulk-management tools to LLM clients over stdio, WebSocket or StreamableHttp.
 
 • Node.js ≥ 18 • TypeScript • No token persistence • 32 tools
 
@@ -9,7 +9,7 @@ A Model Context Protocol (MCP) server for Fastmail’s JMAP API. It exposes emai
 - Advanced: attachments, threads, analytics, multi-criteria search
 - Bulk: mark read/unread, move, delete, add/remove labels
 - Contacts & Calendar: list/search/get, create events
-- Transports: stdio (default), ws, sse
+- Transports: stdio (default), ws, http (StreamableHttp)
 
 ## Quickstart
 
@@ -49,7 +49,7 @@ Required
 
 Optional
 - `FASTMAIL_BASE_URL` (default: `https://api.fastmail.com`)
-- `MCP_TRANSPORT`: `stdio` (default) | `ws` | `sse`
+- `MCP_TRANSPORT`: `stdio` (default) | `ws` | `http` | `sse` (alias for `http`)
 
 WS mode only
 - `PORT` (default: `3000`), `HOST` (default: `0.0.0.0`)
@@ -57,12 +57,13 @@ WS mode only
 - `AUTH_HEADER` (default: `Authorization`), `AUTH_SCHEME` (default: `Bearer`)
 - `CONNECTOR_SHARED_SECRET` (optional). If set, a client must send header `x-connector-secret: <value>`.
 
-SSE mode only
+HTTP (StreamableHttp) mode only
 - `PORT` (default: `3000`), `HOST` (default: `0.0.0.0`)
-- `SSE_PATH` (default: `/mcp`); messages stream is `${SSE_PATH}/messages`
+- `MCP_PATH` or `SSE_PATH` (default: `/mcp`); single endpoint for all MCP operations
 - `AUTH_HEADER` (default: `Authorization`), `AUTH_SCHEME` (default: `Bearer`)
+- `CONNECTOR_SHARED_SECRET` (optional). If set, a client must send header `x-connector-secret: <value>`.
 
-Note: SSE authenticates via the Bearer token supplied by the client. No additional shared-secret gate is enforced in the SSE path.
+Note: StreamableHttp uses a single endpoint for bidirectional communication (POST for requests, GET for SSE streaming, DELETE for session termination). Authentication via Bearer token supplied by the client.
 
 ## Using as a Claude Desktop Extension (DXT)
 
@@ -77,12 +78,12 @@ This produces a `.dxt` package in the project root from `manifest.json`.
 - Fastmail API Token (stored by Claude)
 - Fastmail Base URL (optional)
 
-## Remote Connector (SSE) deployment
+## Remote Connector (StreamableHttp) deployment
 
 Run the server
 ```bash
 npm run build
-MCP_TRANSPORT=sse PORT=3000 HOST=0.0.0.0 \
+MCP_TRANSPORT=http PORT=3000 HOST=0.0.0.0 \
 AUTH_HEADER=Authorization AUTH_SCHEME=Bearer \
 FASTMAIL_BASE_URL="https://api.fastmail.com" \
 node dist/index.js
@@ -102,10 +103,10 @@ curl -fsS https://<your-domain>/health
 services:
   app:
     build: .
-    image: fastmail-mcp:beta
+    image: fastmail-mcp:latest
     restart: unless-stopped
     environment:
-      MCP_TRANSPORT: sse
+      MCP_TRANSPORT: http
       PORT: 3000
       HOST: 0.0.0.0
       AUTH_HEADER: Authorization
@@ -118,20 +119,36 @@ services:
 
 Put this behind TLS (Caddy/Nginx) and expose `https://`.
 
-### Caddy example (SSE)
+### Caddy example (StreamableHttp)
 ```
 fastmail-mcp.example.com {
   encode zstd gzip
   reverse_proxy /mcp app:3000
-  reverse_proxy /mcp/messages app:3000
   reverse_proxy /health app:3000
 }
 ```
 
+### Migration from SSE
+
+If you were using the deprecated SSE transport (`MCP_TRANSPORT=sse`):
+
+1. **Update environment variable**: The server now accepts both `http` and `sse` (as alias) for `MCP_TRANSPORT`. Recommended to use `http` going forward.
+
+2. **Simplified configuration**: StreamableHttp uses a single endpoint (`/mcp`) for all operations (POST, GET, DELETE), replacing the previous dual-endpoint SSE setup (`/mcp` and `/mcp/messages`).
+
+3. **No code changes required**: The authentication and connection flow remain the same. Your existing connector configurations should work without modification.
+
+4. **Benefits of StreamableHttp**:
+   - Single endpoint simplifies deployment and proxy configuration
+   - Better scalability and resource management
+   - Built-in session management with resumability support
+   - Improved reliability with HTTP/2 and HTTP/3 compatibility
+   - Bidirectional communication on the same connection
+
 ### .env for Compose
 ```
 FASTMAIL_BASE_URL=https://api.fastmail.com
-# Optional for WS only; SSE ignores it
+# Optional shared secret for additional security
 # CONNECTOR_SHARED_SECRET=your_shared_secret
 ```
 

@@ -29,13 +29,6 @@ export FASTMAIL_API_TOKEN="<your_token>"
 npm run dev
 ```
 
-Local smoke test
-```bash
-# Put FASTMAIL_API_TOKEN in .env (optionally FASTMAIL_BASE_URL)
-node scripts/test-mcp.mjs
-# Expected: “Fastmail MCP server running on stdio” and “Tools available: 32”
-```
-
 Run via npx (GitHub)
 ```bash
 FASTMAIL_API_TOKEN="<your_token>" \
@@ -199,7 +192,6 @@ Scripts
 - `npm run dev` — tsx with hot reload (stdio)
 - `npm run build` — tsc to `dist/`
 - `npm start` — node `dist/index.js` (stdio)
-- `node scripts/test-mcp.mjs` — local stdio smoke test that loads `.env`
 
 ## API & Credits
 Powered by Fastmail’s JMAP API. Many flows were inspired by the official Fastmail JMAP-Samples (top-ten, batch methods, etc.).

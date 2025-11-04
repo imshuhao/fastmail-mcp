@@ -12,7 +12,6 @@ import { JmapClient, JmapRequest } from './jmap-client.js';
 import { ContactsCalendarClient } from './contacts-calendar.js';
 import { registerHandlers } from './handlers.js';
 import http from 'node:http';
-import { WebSocketServer } from 'ws';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
@@ -1453,6 +1452,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 async function runServer() {
   const transportMode = (process.env.MCP_TRANSPORT || 'stdio').toLowerCase();
+
   if (transportMode === 'stdio') {
     const transport = new StdioServerTransport();
     await server.connect(transport);
@@ -1460,113 +1460,13 @@ async function runServer() {
     return;
   }
 
-  if (transportMode === 'ws') {
+  if (transportMode === 'http') {
     const port = parseInt(process.env.PORT || '3000', 10);
     const host = process.env.HOST || '0.0.0.0';
+    const mcpPath = process.env.MCP_PATH || '/mcp';
     const authHeader = (process.env.AUTH_HEADER || 'authorization').toLowerCase();
     const authScheme = (process.env.AUTH_SCHEME || 'bearer').toLowerCase();
     const defaultBaseUrl = process.env.FASTMAIL_BASE_URL;
-    const wsPath = process.env.WS_PATH || '/mcp';
-    const sharedSecret = process.env.CONNECTOR_SHARED_SECRET;
-
-    const httpServer = http.createServer((req, res) => {
-      if (req.url === '/health') {
-        res.writeHead(200).end('ok');
-        return;
-      }
-      res.writeHead(404).end('not found');
-    });
-
-    const wss = new WebSocketServer({ server: httpServer, path: wsPath });
-
-    wss.on('connection', async (ws, req) => {
-      // Extract token from Authorization header (or configured header)
-      const headers = req.headers;
-      let headerVal: string | undefined;
-      for (const [key, value] of Object.entries(headers)) {
-        if (key.toLowerCase() === authHeader && typeof value === 'string') {
-          headerVal = value;
-          break;
-        }
-      }
-      let token: string | undefined;
-      if (headerVal) {
-        const [scheme, rest] = headerVal.split(' ');
-        if (scheme && rest && scheme.toLowerCase() === authScheme) {
-          token = rest.trim();
-        }
-      }
-      if (!token) {
-        try { ws.close(4401, 'unauthorized'); } catch {}
-        return;
-      }
-
-      // Optional shared secret gate
-      if (sharedSecret) {
-        const providedSecret = (headers['x-connector-secret'] as string | undefined) || '';
-        if (providedSecret !== sharedSecret) {
-          try { ws.close(4403, 'forbidden'); } catch {}
-          return;
-        }
-      }
-
-      // Per-connection server
-      const connServer = new Server(
-        { name: 'fastmail-mcp', version: '2.0.0' },
-        { capabilities: { tools: {} } }
-      );
-
-      const auth = new FastmailAuth({ apiToken: token, baseUrl: defaultBaseUrl });
-      const jmap = new JmapClient(auth, { maxConcurrent: 2, maxQueue: 50, baseDelayMs: 300, maxDelayMs: 5000 });
-      const contacts = new ContactsCalendarClient(auth);
-      registerHandlers(connServer, {
-        getJmapClient: () => jmap,
-        getContactsClient: () => contacts,
-      });
-
-      // Minimal WebSocket transport implementing the Transport interface
-      const transport = {
-        start: async () => {},
-        send: async (message: any) => {
-          ws.send(JSON.stringify(message));
-        },
-        close: async () => {
-          try { ws.close(); } catch {}
-        },
-        onclose: undefined as (() => void) | undefined,
-        onerror: undefined as ((error: Error) => void) | undefined,
-        onmessage: undefined as ((message: any) => void) | undefined,
-      };
-
-      ws.on('message', (data) => {
-        try {
-          const parsed = JSON.parse(String(data));
-          if (transport.onmessage) transport.onmessage(parsed);
-        } catch {}
-      });
-      ws.on('close', () => {
-        if (transport.onclose) transport.onclose();
-      });
-      ws.on('error', (err) => {
-        if (transport.onerror) transport.onerror(err as Error);
-      });
-
-      await connServer.connect(transport as any);
-    });
-
-    await new Promise<void>((resolve) => httpServer.listen(port, host, resolve));
-    console.error(`Fastmail MCP server running on ws://${host}:${port}${wsPath}`);
-    return;
-  }
-
-  if (transportMode === 'http' || transportMode === 'sse') {
-    const port = parseInt(process.env.PORT || '3000', 10);
-    const host = process.env.HOST || '0.0.0.0';
-    const mcpPath = process.env.MCP_PATH || process.env.SSE_PATH || '/mcp';
-    const authHeader = (process.env.AUTH_HEADER || 'authorization').toLowerCase();
-    const authScheme = (process.env.AUTH_SCHEME || 'bearer').toLowerCase();
-    const defaultBaseUrl = process.env.FASTMAIL_BASE_URL;
-    const sharedSecret = process.env.CONNECTOR_SHARED_SECRET;
 
     const sessions = new Map<string, {
       transport: StreamableHTTPServerTransport;
@@ -1610,12 +1510,6 @@ async function runServer() {
               if (scheme && rest && scheme.toLowerCase() === authScheme) {
                 token = rest.trim();
               }
-            }
-
-            // Check shared secret if configured
-            if (sharedSecret && req.headers['x-connector-secret'] !== sharedSecret) {
-              res.writeHead(403).end('forbidden');
-              return;
             }
 
             let transport: StreamableHTTPServerTransport;

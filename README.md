@@ -1,6 +1,6 @@
 # Fastmail MCP Server
 
-A Model Context Protocol (MCP) server for Fastmail’s JMAP API. It exposes email, contacts, calendar, identity and bulk-management tools to LLM clients over stdio, WebSocket or SSE.
+A Model Context Protocol (MCP) server for Fastmail's JMAP API. It exposes email, contacts, calendar, identity and bulk-management tools to LLM clients over stdio or HTTP (StreamableHttp).
 
 • Node.js ≥ 18 • TypeScript • No token persistence • 32 tools
 
@@ -9,7 +9,7 @@ A Model Context Protocol (MCP) server for Fastmail’s JMAP API. It exposes emai
 - Advanced: attachments, threads, analytics, multi-criteria search
 - Bulk: mark read/unread, move, delete, add/remove labels
 - Contacts & Calendar: list/search/get, create events
-- Transports: stdio (default), ws, sse
+- Transports: stdio (default), http (StreamableHttp)
 
 ## Quickstart
 
@@ -49,20 +49,14 @@ Required
 
 Optional
 - `FASTMAIL_BASE_URL` (default: `https://api.fastmail.com`)
-- `MCP_TRANSPORT`: `stdio` (default) | `ws` | `sse`
+- `MCP_TRANSPORT`: `stdio` (default) | `http`
 
-WS mode only
+HTTP mode only
 - `PORT` (default: `3000`), `HOST` (default: `0.0.0.0`)
-- `WS_PATH` (default: `/mcp`)
-- `AUTH_HEADER` (default: `Authorization`), `AUTH_SCHEME` (default: `Bearer`)
-- `CONNECTOR_SHARED_SECRET` (optional). If set, a client must send header `x-connector-secret: <value>`.
-
-SSE mode only
-- `PORT` (default: `3000`), `HOST` (default: `0.0.0.0`)
-- `SSE_PATH` (default: `/mcp`); messages stream is `${SSE_PATH}/messages`
+- `MCP_PATH` (default: `/mcp`) - single endpoint for all MCP operations
 - `AUTH_HEADER` (default: `Authorization`), `AUTH_SCHEME` (default: `Bearer`)
 
-Note: SSE authenticates via the Bearer token supplied by the client. No additional shared-secret gate is enforced in the SSE path.
+Note: StreamableHttp uses a single endpoint for bidirectional communication (POST for requests, GET for SSE streaming, DELETE for session termination). Authentication via Bearer token supplied by the client.
 
 ## Using as a Claude Desktop Extension (DXT)
 
@@ -77,12 +71,12 @@ This produces a `.dxt` package in the project root from `manifest.json`.
 - Fastmail API Token (stored by Claude)
 - Fastmail Base URL (optional)
 
-## Remote Connector (SSE) deployment
+## Remote Connector (StreamableHttp) deployment
 
 Run the server
 ```bash
 npm run build
-MCP_TRANSPORT=sse PORT=3000 HOST=0.0.0.0 \
+MCP_TRANSPORT=http PORT=3000 HOST=0.0.0.0 \
 AUTH_HEADER=Authorization AUTH_SCHEME=Bearer \
 FASTMAIL_BASE_URL="https://api.fastmail.com" \
 node dist/index.js
@@ -102,15 +96,12 @@ curl -fsS https://<your-domain>/health
 services:
   app:
     build: .
-    image: fastmail-mcp:beta
+    image: fastmail-mcp:latest
     restart: unless-stopped
     environment:
-      MCP_TRANSPORT: sse
+      MCP_TRANSPORT: http
       PORT: 3000
       HOST: 0.0.0.0
-      AUTH_HEADER: Authorization
-      AUTH_SCHEME: Bearer
-      CONNECTOR_SHARED_SECRET: ${CONNECTOR_SHARED_SECRET}
       FASTMAIL_BASE_URL: ${FASTMAIL_BASE_URL}
     ports:
       - "3000:3000"
@@ -118,12 +109,11 @@ services:
 
 Put this behind TLS (Caddy/Nginx) and expose `https://`.
 
-### Caddy example (SSE)
+### Caddy example (StreamableHttp)
 ```
 fastmail-mcp.example.com {
   encode zstd gzip
   reverse_proxy /mcp app:3000
-  reverse_proxy /mcp/messages app:3000
   reverse_proxy /health app:3000
 }
 ```
@@ -131,8 +121,6 @@ fastmail-mcp.example.com {
 ### .env for Compose
 ```
 FASTMAIL_BASE_URL=https://api.fastmail.com
-# Optional for WS only; SSE ignores it
-# CONNECTOR_SHARED_SECRET=your_shared_secret
 ```
 
 ## Available Tools (32)
@@ -200,11 +188,11 @@ Self-check tools
 Project layout
 ```
 src/
-├─ index.ts              # Main server; stdio/ws/sse transports
+├─ index.ts              # Main server; stdio/http transports
 ├─ auth.ts               # Token + headers + session URL
 ├─ jmap-client.ts        # JMAP wrapper, concurrency + backoff
 ├─ contacts-calendar.ts  # Contacts/Calendar client
-└─ handlers.ts           # Tool registry used by ws/sse
+└─ handlers.ts           # Tool registry for http mode
 ```
 
 Scripts

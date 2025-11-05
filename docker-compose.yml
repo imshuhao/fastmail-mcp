@@ -7,8 +7,8 @@ services:
       MCP_TRANSPORT: http
       PORT: 3000
       HOST: 0.0.0.0
-      AUTH_HEADER: Authorization
-      AUTH_SCHEME: Bearer
-      FASTMAIL_BASE_URL: ${FASTMAIL_BASE_URL}
+      OAUTH_BASE_URL: ${OAUTH_BASE_URL:-http://localhost:3000}
+      FASTMAIL_BASE_URL: ${FASTMAIL_BASE_URL:-https://api.fastmail.com}
+      MCP_PATH: /mcp
     ports:
       - "3000:3000"

@@ -82,12 +82,13 @@ Add a custom HTTPS connector in your MCP client
 **OAuth Flow:**
 1. Client connects to `/mcp` → receives 401 with OAuth discovery info
 2. Client fetches `/.well-known/oauth-authorization-server` for OAuth metadata
-3. Client redirects user to `/authorize?client_id=...&code_challenge=...&redirect_uri=...`
-4. User sees web form to paste their Fastmail API token
-5. Server validates token against Fastmail, generates authorization code
-6. User is redirected back to client with code
-7. Client exchanges code for access token at `/token`
-8. Client uses access token (the Fastmail token) for all subsequent requests
+3. (Optional) Client registers at `/register` using RFC 7591 (fake implementation, always succeeds)
+4. Client redirects user to `/authorize?client_id=...&code_challenge=...&redirect_uri=...`
+5. User sees web form to paste their Fastmail API token
+6. Server validates token against Fastmail, generates authorization code
+7. User is redirected back to client with code
+8. Client exchanges code for access token at `/token`
+9. Client uses access token (the Fastmail token) for all subsequent requests
 
 Health check
 ```bash
@@ -126,6 +127,7 @@ fastmail-mcp.example.com {
   reverse_proxy /authorize* app:3000
   reverse_proxy /token app:3000
   reverse_proxy /revoke app:3000
+  reverse_proxy /register app:3000
   reverse_proxy /.well-known/* app:3000
   reverse_proxy /health app:3000
 }

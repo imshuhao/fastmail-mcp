@@ -344,6 +344,43 @@ export class SimpleTokenOAuthProvider {
   }
 
   /**
+   * RFC 7591 Dynamic Client Registration (fake implementation)
+   * Accepts any client registration and returns a successful response
+   */
+  async registerClient(metadata: {
+    redirect_uris?: string[];
+    token_endpoint_auth_method?: string;
+    grant_types?: string[];
+    response_types?: string[];
+    client_name?: string;
+    client_uri?: string;
+    logo_uri?: string;
+    scope?: string;
+    contacts?: string[];
+    tos_uri?: string;
+    policy_uri?: string;
+    jwks_uri?: string;
+    jwks?: unknown;
+    software_id?: string;
+    software_version?: string;
+  }) {
+    // Generate a fake client_id (no actual storage or validation)
+    const clientId = `fake-client-${randomUUID()}`;
+
+    // Return RFC 7591 compliant response
+    return {
+      client_id: clientId,
+      client_id_issued_at: Math.floor(Date.now() / 1000),
+      redirect_uris: metadata.redirect_uris || [],
+      token_endpoint_auth_method: metadata.token_endpoint_auth_method || 'none',
+      grant_types: metadata.grant_types || ['authorization_code'],
+      response_types: metadata.response_types || ['code'],
+      client_name: metadata.client_name || 'Unnamed Client',
+      scope: metadata.scope || 'email contacts calendar'
+    };
+  }
+
+  /**
    * Get authorization server metadata
    */
   getAuthorizationServerMetadata() {
@@ -352,6 +389,7 @@ export class SimpleTokenOAuthProvider {
       authorization_endpoint: `${this.baseUrl}/authorize`,
       token_endpoint: `${this.baseUrl}/token`,
       revocation_endpoint: `${this.baseUrl}/revoke`,
+      registration_endpoint: `${this.baseUrl}/register`,
       code_challenge_methods_supported: ['S256'],
       grant_types_supported: ['authorization_code'],
       response_types_supported: ['code'],

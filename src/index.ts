@@ -1592,6 +1592,28 @@ async function runServer() {
         return;
       }
 
+      // RFC 7591 Dynamic Client Registration endpoint
+      if (url.pathname === '/register' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        await new Promise((resolve) => req.on('end', resolve));
+
+        try {
+          const metadata = JSON.parse(body);
+          const registration = await oauthProvider.registerClient(metadata);
+          res.writeHead(201, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(registration));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Registration failed';
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: 'invalid_client_metadata',
+            error_description: message
+          }));
+        }
+        return;
+      }
+
       // OAuth discovery endpoints
       if (url.pathname === '/.well-known/oauth-authorization-server') {
         const metadata = oauthProvider.getAuthorizationServerMetadata();

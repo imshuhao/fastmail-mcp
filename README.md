@@ -37,7 +37,7 @@ FASTMAIL_API_TOKEN="<your_token>" \
 
 ## Configuration
 
-Required
+Required (stdio mode only)
 - `FASTMAIL_API_TOKEN`: Fastmail API token for the account
 
 Optional
@@ -46,10 +46,10 @@ Optional
 
 HTTP mode only
 - `PORT` (default: `3000`), `HOST` (default: `0.0.0.0`)
-- `MCP_PATH` (default: `/mcp`) - single endpoint for all MCP operations
-- `AUTH_HEADER` (default: `Authorization`), `AUTH_SCHEME` (default: `Bearer`)
+- `MCP_PATH` (default: `/mcp`) - MCP endpoint
+- `OAUTH_BASE_URL` - Public URL for OAuth callbacks (e.g., `https://your-domain.com`)
 
-Note: StreamableHttp uses a single endpoint for bidirectional communication (POST for requests, GET for SSE streaming, DELETE for session termination). Authentication via Bearer token supplied by the client.
+**Note**: HTTP mode uses OAuth 2.1 for authentication. Users will be redirected to a web form to paste their Fastmail API token, which is then used as the OAuth access token.
 
 ## Using as a Claude Desktop Extension (DXT)
 
@@ -64,24 +64,39 @@ This produces a `.dxt` package in the project root from `manifest.json`.
 - Fastmail API Token (stored by Claude)
 - Fastmail Base URL (optional)
 
-## Remote Connector (StreamableHttp) deployment
+## Remote Connector (StreamableHttp) deployment with OAuth
 
 Run the server
 ```bash
 npm run build
 MCP_TRANSPORT=http PORT=3000 HOST=0.0.0.0 \
-AUTH_HEADER=Authorization AUTH_SCHEME=Bearer \
+OAUTH_BASE_URL="https://your-domain.com" \
 FASTMAIL_BASE_URL="https://api.fastmail.com" \
 node dist/index.js
 ```
 
-Add a custom HTTPS connector in your client
-- URL: `https://<your-domain>/mcp`
-- Secret: your Fastmail API token (sent as `Authorization: Bearer <token>`)
+Add a custom HTTPS connector in your MCP client
+- URL: `https://your-domain.com/mcp`
+- The client will automatically discover OAuth endpoints and redirect users to authorize
+
+**OAuth Flow:**
+1. Client connects to `/mcp` → receives 401 with OAuth discovery info
+2. Client fetches `/.well-known/oauth-authorization-server` for OAuth metadata
+3. Client redirects user to `/authorize?client_id=...&code_challenge=...&redirect_uri=...`
+4. User sees web form to paste their Fastmail API token
+5. Server validates token against Fastmail, generates authorization code
+6. User is redirected back to client with code
+7. Client exchanges code for access token at `/token`
+8. Client uses access token (the Fastmail token) for all subsequent requests
 
 Health check
 ```bash
-curl -fsS https://<your-domain>/health
+curl -fsS https://your-domain.com/health
+```
+
+OAuth endpoints
+```bash
+curl https://your-domain.com/.well-known/oauth-authorization-server
 ```
 
 ### Docker Compose (example)
@@ -95,6 +110,7 @@ services:
       MCP_TRANSPORT: http
       PORT: 3000
       HOST: 0.0.0.0
+      OAUTH_BASE_URL: https://fastmail-mcp.example.com
       FASTMAIL_BASE_URL: ${FASTMAIL_BASE_URL}
     ports:
       - "3000:3000"
@@ -102,11 +118,15 @@ services:
 
 Put this behind TLS (Caddy/Nginx) and expose `https://`.
 
-### Caddy example (StreamableHttp)
+### Caddy example (StreamableHttp with OAuth)
 ```
 fastmail-mcp.example.com {
   encode zstd gzip
   reverse_proxy /mcp app:3000
+  reverse_proxy /authorize* app:3000
+  reverse_proxy /token app:3000
+  reverse_proxy /revoke app:3000
+  reverse_proxy /.well-known/* app:3000
   reverse_proxy /health app:3000
 }
 ```

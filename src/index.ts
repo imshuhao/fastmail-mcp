@@ -15,6 +15,7 @@ import http from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { SimpleTokenOAuthProvider } from './simple-token-oauth-provider.js';
 
 const server = new Server(
   {
@@ -1464,9 +1465,17 @@ async function runServer() {
     const port = parseInt(process.env.PORT || '3000', 10);
     const host = process.env.HOST || '0.0.0.0';
     const mcpPath = process.env.MCP_PATH || '/mcp';
-    const authHeader = (process.env.AUTH_HEADER || 'authorization').toLowerCase();
-    const authScheme = (process.env.AUTH_SCHEME || 'bearer').toLowerCase();
     const defaultBaseUrl = process.env.FASTMAIL_BASE_URL;
+    // Use localhost for OAuth URLs when host is 0.0.0.0 (not accessible from browsers)
+    const oauthHost = host === '0.0.0.0' ? 'localhost' : host;
+    const baseUrl = process.env.OAUTH_BASE_URL || `http://${oauthHost}:${port}`;
+
+    // Initialize OAuth provider
+    const oauthProvider = new SimpleTokenOAuthProvider({
+      baseUrl,
+      fastmailBaseUrl: defaultBaseUrl
+    });
+    oauthProvider.startCleanup();
 
     const sessions = new Map<string, {
       transport: StreamableHTTPServerTransport;
@@ -1477,11 +1486,133 @@ async function runServer() {
     const httpServer = http.createServer(async (req, res) => {
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
+      // Add CORS headers for all responses
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, mcp-session-id');
+      res.setHeader('Access-Control-Expose-Headers', 'WWW-Authenticate, mcp-session-id');
+
+      // Handle preflight requests
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      // Health check endpoint
       if (url.pathname === '/health') {
         res.writeHead(200).end('ok');
         return;
       }
 
+      // OAuth authorization endpoint - show token input form
+      if (url.pathname === '/authorize' && req.method === 'GET') {
+        const clientId = url.searchParams.get('client_id') || '';
+        const redirectUri = url.searchParams.get('redirect_uri') || '';
+        const state = url.searchParams.get('state') || '';
+        const codeChallenge = url.searchParams.get('code_challenge') || '';
+        const codeChallengeMethod = url.searchParams.get('code_challenge_method') || '';
+
+        const html = await oauthProvider.renderAuthorizationForm({
+          client_id: clientId,
+          redirect_uri: redirectUri,
+          state,
+          code_challenge: codeChallenge,
+          code_challenge_method: codeChallengeMethod
+        });
+
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(html);
+        return;
+      }
+
+      // OAuth authorization form submission
+      if (url.pathname === '/authorize/submit' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        await new Promise((resolve) => req.on('end', resolve));
+
+        // Parse form data
+        const params = new URLSearchParams(body);
+        const formData = {
+          client_id: params.get('client_id') || '',
+          redirect_uri: params.get('redirect_uri') || '',
+          state: params.get('state') || undefined,
+          code_challenge: params.get('code_challenge') || '',
+          code_challenge_method: params.get('code_challenge_method') || '',
+          token: params.get('token') || ''
+        };
+
+        const result = await oauthProvider.handleAuthorizationSubmit(formData);
+        res.writeHead(302, { 'Location': result.redirectUrl });
+        res.end();
+        return;
+      }
+
+      // OAuth token endpoint
+      if (url.pathname === '/token' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        await new Promise((resolve) => req.on('end', resolve));
+
+        try {
+          const params = new URLSearchParams(body);
+          const tokenResponse = await oauthProvider.exchangeAuthorizationCode({
+            client_id: params.get('client_id') || '',
+            code: params.get('code') || '',
+            code_verifier: params.get('code_verifier') || ''
+          });
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(tokenResponse));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Token exchange failed';
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: 'invalid_grant',
+            error_description: message
+          }));
+        }
+        return;
+      }
+
+      // OAuth revoke endpoint
+      if (url.pathname === '/revoke' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        await new Promise((resolve) => req.on('end', resolve));
+
+        const params = new URLSearchParams(body);
+        const token = params.get('token');
+        if (token) {
+          await oauthProvider.revokeToken(token);
+        }
+
+        res.writeHead(200).end();
+        return;
+      }
+
+      // OAuth discovery endpoints
+      if (url.pathname === '/.well-known/oauth-authorization-server') {
+        const metadata = oauthProvider.getAuthorizationServerMetadata();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(metadata));
+        return;
+      }
+
+      if (url.pathname.startsWith('/.well-known/oauth-protected-resource/')) {
+        const resourceMetadata = {
+          resource: mcpPath,
+          authorization_servers: [baseUrl],
+          bearer_methods_supported: ['header'],
+          resource_documentation: `${baseUrl}/health`
+        };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(resourceMetadata));
+        return;
+      }
+
+      // MCP endpoint - requires OAuth authentication
       if (url.pathname === mcpPath) {
         const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
@@ -1494,21 +1625,68 @@ async function runServer() {
             await new Promise((resolve) => req.on('end', resolve));
             const parsedBody = body ? JSON.parse(body) : null;
 
-            // Extract and validate authentication
-            const headers = req.headers;
-            let headerVal: string | undefined;
-            for (const [key, value] of Object.entries(headers)) {
-              if (key.toLowerCase() === authHeader && typeof value === 'string') {
-                headerVal = value;
-                break;
-              }
+            // Extract and validate OAuth Bearer token
+            let token: string | undefined;
+            const authHeader = req.headers.authorization || req.headers.Authorization;
+
+            if (!authHeader) {
+              // No auth header provided - return 401 with OAuth discovery
+              const resourceMetadataUrl = `${baseUrl}/.well-known/oauth-protected-resource${mcpPath}`;
+              res.writeHead(401, {
+                'Content-Type': 'application/json',
+                'WWW-Authenticate': `Bearer realm="fastmail", resource_metadata="${resourceMetadataUrl}"`
+              });
+              res.end(JSON.stringify({
+                jsonrpc: '2.0',
+                error: {
+                  code: -32001,
+                  message: 'Authorization required. Please authenticate via OAuth.'
+                },
+                id: null
+              }));
+              return;
             }
 
-            let token: string | undefined;
-            if (headerVal) {
-              const [scheme, rest] = headerVal.split(' ');
-              if (scheme && rest && scheme.toLowerCase() === authScheme) {
-                token = rest.trim();
+            if (typeof authHeader === 'string') {
+              const [scheme, tokenValue] = authHeader.split(' ');
+              if (scheme && tokenValue && scheme.toLowerCase() === 'bearer') {
+                token = tokenValue.trim();
+
+                // Validate token using OAuth provider
+                try {
+                  await oauthProvider.verifyAccessToken(token);
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : 'Invalid token';
+                  res.writeHead(401, {
+                    'Content-Type': 'application/json',
+                    'WWW-Authenticate': `Bearer realm="fastmail", error="invalid_token", error_description="${message}"`
+                  });
+                  res.end(JSON.stringify({
+                    jsonrpc: '2.0',
+                    error: {
+                      code: -32001,
+                      message: 'Invalid or expired access token'
+                    },
+                    id: null
+                  }));
+                  return;
+                }
+              } else {
+                // Invalid auth header format
+                const resourceMetadataUrl = `${baseUrl}/.well-known/oauth-protected-resource${mcpPath}`;
+                res.writeHead(401, {
+                  'Content-Type': 'application/json',
+                  'WWW-Authenticate': `Bearer realm="fastmail", resource_metadata="${resourceMetadataUrl}"`
+                });
+                res.end(JSON.stringify({
+                  jsonrpc: '2.0',
+                  error: {
+                    code: -32001,
+                    message: 'Invalid authorization header format. Expected: Bearer <token>'
+                  },
+                  id: null
+                }));
+                return;
               }
             }
 
@@ -1599,9 +1777,10 @@ async function runServer() {
 
             // Validate token for non-initialization requests
             if (session && !session.context.token) {
+              const resourceMetadataUrl = `${baseUrl}/.well-known/oauth-protected-resource${mcpPath}`;
               res.writeHead(401, {
-                'WWW-Authenticate': `${authScheme.charAt(0).toUpperCase() + authScheme.slice(1)} realm="fastmail", charset="UTF-8"`
-              }).end('authorization required');
+                'WWW-Authenticate': `Bearer realm="fastmail", resource_metadata="${resourceMetadataUrl}"`
+              }).end('Authorization required. Please authenticate via OAuth.');
               return;
             }
 
